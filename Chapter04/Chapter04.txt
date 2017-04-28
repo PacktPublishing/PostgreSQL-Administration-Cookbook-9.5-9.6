@@ -1,0 +1,6 @@
+SELECT name, setting, unit
+,(source = 'default') as is_default
+FROM pg_settings
+WHERE context = 'sighup'
+AND (name like '%delay' or name like '%timeout')
+AND setting != '0';

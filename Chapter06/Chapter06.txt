@@ -1,0 +1,124 @@
+create or replace function copy_from(tablename text, filepath text)
+returns void
+security definer
+as
+$$
+declare
+begin
+  execute 'copy ' || quote_ident(tablename)
+  || ' from ' || quote_literal(filepath) ;
+end;
+$$ language plpgsql;
+
+create or replace function debugging_info_on()
+returns void
+security definer
+as
+$$
+begin
+  set client_min_messages to 'DEBUG1';
+  set log_min_messages to 'DEBUG1';
+  set log_error_verbosity to 'VERBOSE';
+  set log_min_duration_statement to 0;
+end;
+$$ language plpgsql;
+
+create or replace function debugging_info_reset()
+returns void
+security definer
+as
+$$
+begin
+  set client_min_messages to DEFAULT;
+  set log_min_messages to DEFAULT;
+  set log_error_verbosity to DEFAULT;
+  set log_min_duration_statement to DEFAULT;
+end;
+$$ language plpgsql;
+
+
+CREATE TABLE emp (
+ empname text NOT NULL,
+ salary integer
+);
+
+CREATE TABLE emp_audit(
+operation text NOT NULL,
+stamp timestamp NOT NULL,
+userid text NOT NULL,
+empname text NOT NULL,
+salary integer
+);
+
+CREATE FUNCTION log_emp_audit(
+  operation text, userid text, empname text, salary integer
+) RETURNS VOID AS
+$$
+  INSERT INTO emp_audit VALUES($1, now(), $2, $3, $4)
+$$ LANGUAGE SQL;
+
+CREATE OR REPLACE FUNCTION log_emp_audit(
+  operation text, userid text, empname text, salary integer
+) RETURNS VOID AS $$
+  CONNECT 'dbname=auditdb';
+$$ LANGUAGE plproxy;
+
+CREATE OR REPLACE FUNCTION do_emp_audit()
+RETURNS TRIGGER AS
+$$
+BEGIN
+  IF (TG_OP = 'DELETE') THEN
+    PERFORM log_emp_audit('DEL', user, OLD.empname, OLD.salary);
+  ELSIF (TG_OP = 'UPDATE') THEN
+    -- save old and new values
+    PERFORM log_emp_audit('OLD', user, OLD.empname, OLD.salary);
+    PERFORM log_emp_audit('NEW', user, NEW.empname, NEW.salary);
+  ELSIF (TG_OP = 'INSERT') THEN
+    PERFORM log_emp_audit('INS', user, NEW.empname, NEW.salary);
+  END IF;
+  RETURN NULL; -- result is ignored since this is an AFTER trigger
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER emp_remote_audit
+AFTER INSERT OR UPDATE OR DELETE ON emp
+FOR EACH ROW EXECUTE PROCEDURE do_emp_audit();
+
+create or replace function get_my_public_key()
+returns text as $$
+  return open('/home/pguser/public.key').read()
+$$
+language plpythonu;
+
+create or replace function get_my_secret_key()
+returns text as $$
+  return open('/home/pguser/secret.key').read()
+$$
+language plpythonu;
+
+create or replace function encrypt_using_my_public_key(
+  cleartext text,
+  ciphertext out bytea
+)
+AS $$
+DECLARE
+  pubkey_bin bytea;
+BEGIN
+  -- text version of public key needs to be passed through function dearmor() to get to raw key
+  pubkey_bin := dearmor(get_my_public_key());
+  ciphertext := pgp_pub_encrypt(cleartext, pubkey_bin);
+END;
+$$ language plpgsql security definer;
+
+create or replace function decrypt_using_my_secret_key(
+  ciphertext bytea,cleartext out text
+)
+AS $$
+DECLARE
+  secret_key_bin bytea;
+BEGIN
+  -- text version of secret key needs to be passed through function dearmor() to get to raw binary key
+  secret_key_bin := dearmor(get_my_secret_key());
+  cleartext := pgp_pub_decrypt(ciphertext, secret_key_bin);
+END;
+$$ language plpgsql security definer;

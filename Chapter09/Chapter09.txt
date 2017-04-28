@@ -1,0 +1,261 @@
+SELECT n.nspname, c.relname,
+  pg_catalog.array_to_string(c.reloptions || array(
+    select 'toast.' ||
+    x from pg_catalog.unnest(tc.reloptions) x),', ')
+  as relopts
+FROM pg_catalog.pg_class c
+LEFT JOIN pg_catalog.pg_class tc ON (c.reltoastrelid = tc.oid)
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE c.relkind = 'r'
+AND nspname NOT IN ('pg_catalog', 'information_schema');
+
+
+CREATE OR REPLACE VIEW av_needed AS
+  SELECT N.nspname, C.relname
+  , pg_stat_get_tuples_inserted(C.oid) AS n_tup_ins
+  , pg_stat_get_tuples_updated(C.oid) AS n_tup_upd
+  , pg_stat_get_tuples_deleted(C.oid) AS n_tup_del
+  , CASE WHEN pg_stat_get_tuples_updated(C.oid) > 0
+    THEN pg_stat_get_tuples_hot_updated(C.oid)::real
+       / pg_stat_get_tuples_updated(C.oid)
+    END
+    AS HOT_update_ratio
+  , pg_stat_get_live_tuples(C.oid) AS n_live_tup
+  , pg_stat_get_dead_tuples(C.oid) AS n_dead_tup
+  , C.reltuples AS reltuples
+  , round( current_setting('autovacuum_vacuum_threshold')::integer
+    + current_setting('autovacuum_vacuum_scale_factor')::numeric
+    * C.reltuples)
+  AS av_threshold
+  , date_trunc('minute',
+      greatest(pg_stat_get_last_vacuum_time(C.oid),
+        pg_stat_get_last_autovacuum_time(C.oid)))
+  AS last_vacuum
+  , date_trunc('minute',
+      greatest(pg_stat_get_last_analyze_time(C.oid),
+        pg_stat_get_last_analyze_time(C.oid)))
+  AS last_analyze
+  , pg_stat_get_dead_tuples(C.oid) >
+    round( current_setting('autovacuum_vacuum_threshold')::integer
+    + current_setting('autovacuum_vacuum_scale_factor')::numeric
+    * C.reltuples)
+  AS av_needed
+  , CASE WHEN reltuples > 0
+    THEN round(100.0 * pg_stat_get_dead_tuples(C.oid) / reltuples)
+    ELSE 0 END
+    AS pct_dead
+  FROM pg_class C
+  LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace)
+  WHERE C.relkind IN ('r', 't')
+  AND N.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND N.nspname NOT LIKE 'pg_toast%'
+  ORDER BY av_needed DESC, n_dead_tup DESC;
+
+
+SELECT
+  nspname,relname,
+  round(100 * pg_relation_size(indexrelid) /
+    pg_relation_size(indrelid)) / 100
+  AS index_ratio,
+  pg_size_pretty(pg_relation_size(indexrelid))
+  AS index_size,
+  pg_size_pretty(pg_relation_size(indrelid))
+  AS table_size
+FROM pg_index I
+LEFT JOIN pg_class C ON (C.oid = I.indexrelid)
+LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace)
+WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+  AND C.relkind='i' AND pg_relation_size(indrelid) > 0;
+
+
+CREATE OR REPLACE FUNCTION trial_drop_index(iname TEXT)
+RETURNS VOID
+LANGUAGE SQL AS $$
+  UPDATE pg_index
+  SET indisvalid = false
+  WHERE indexrelid = $1::regclass;
+$$;
+
+
+CREATE OR REPLACE FUNCTION trial_undrop_index(iname TEXT)
+RETURNS VOID
+LANGUAGE SQL AS $$
+  UPDATE pg_index
+  SET indisvalid = true
+  WHERE indexrelid = $1::regclass;
+$$;
+
+
+CREATE VIEW non_local_quarterly_profit_2013 AS
+SELECT
+  spoint_id,
+  extract('quarter' from sale_time) as sale_quarter,
+  sum(sale_price) - sum(cost) AS profit,
+  count(*) AS nr_of_sales
+FROM sale s
+JOIN item_in_wh iw ON s.item_in_wh_id=iw.id
+JOIN item i ON iw.item_id = i.id
+JOIN salespoint sp ON s.spoint_id = sp.id
+JOIN location sploc ON sp.loc_id = sploc.id
+JOIN warehouse wh ON iw.whouse_id = wh.id
+JOIN location whloc ON wh.loc_id = whloc.id
+WHERE sale_time >= '2013-01-01'
+AND sale_time < '2014-01-01'
+AND sploc.id != whloc.id
+GROUP BY 1,2;
+
+SELECT shop.sp_name AS shop_name,
+  q1_nloc_profit.profit as q1_profit,
+  q2_nloc_profit.profit as q2_profit,
+  q3_nloc_profit.profit as q3_profit,
+  q4_nloc_profit.profit as q4_profit,
+  year_nloc_profit.profit as year_profit
+FROM (SELECT * FROM salespoint ORDER BY sp_name) AS shop
+LEFT JOIN non_local_quarterly_profit_2013 AS q1_nloc_profit
+ON shop.id = Q1_NLOC_PROFIT.spoint_id
+AND q1_nloc_profit.sale_quarter = 1
+LEFT JOIN non_local_quarterly_profit_2013 AS q2_nloc_profit
+ON shop.id = Q2_NLOC_PROFIT.spoint_id
+AND q2_nloc_profit.sale_quarter = 2
+LEFT JOIN non_local_quarterly_profit_2013 AS q3_nloc_profit
+ON shop.id = Q3_NLOC_PROFIT.spoint_id
+AND q3_nloc_profit.sale_quarter = 3
+LEFT JOIN non_local_quarterly_profit_2013 AS q4_nloc_profit
+ON shop.id = Q4_NLOC_PROFIT.spoint_id
+AND q4_nloc_profit.sale_quarter = 4
+LEFT JOIN (
+  SELECT spoint_id, sum(profit) AS profit
+  FROM non_local_quarterly_profit_2013 GROUP BY 1
+) AS year_nloc_profit
+ON shop.id = year_nloc_profit.spoint_id
+ORDER BY 1;
+
+WITH nlqp AS (
+  SELECT
+    spoint_id,
+    extract('quarter' from sale_time) as sale_quarter,
+    sum(sale_price) - sum(cost) AS profit,
+    count(*) AS nr_of_sales
+  FROM sale s
+  JOIN item_in_wh iw ON s.item_in_wh_id=iw.id
+  JOIN item i ON iw.item_id = i.id
+  JOIN salespoint sp ON s.spoint_id = sp.id
+  JOIN location sploc ON sp.loc_id = sploc.id
+  JOIN warehouse wh ON iw.whouse_id = wh.id
+  JOIN location whloc ON wh.loc_id = whloc.id
+  WHERE sale_time >= '2013-01-01'
+  AND sale_time < '2014-01-01'AND sploc.id != whloc.id
+  GROUP BY 1,2
+)
+SELECT shop.sp_name AS shop_name,
+  q1_nloc_profit.profit as q1_profit,
+  q2_nloc_profit.profit as q2_profit,
+  q3_nloc_profit.profit as q3_profit,
+  q4_nloc_profit.profit as q4_profit,
+  year_nloc_profit.profit as year_profit
+FROM (SELECT * FROM salespoint ORDER BY sp_name) AS shop
+LEFT JOIN nlqp AS q1_nloc_profit
+ON shop.id = Q1_NLOC_PROFIT.spoint_id
+AND q1_nloc_profit.sale_quarter = 1
+LEFT JOIN nlqp AS q2_nloc_profit
+ON shop.id = Q2_NLOC_PROFIT.spoint_id
+AND q2_nloc_profit.sale_quarter = 2
+LEFT JOIN nlqp AS q3_nloc_profit
+ON shop.id = Q3_NLOC_PROFIT.spoint_id
+AND q3_nloc_profit.sale_quarter = 3
+LEFT JOIN nlqp AS q4_nloc_profit
+ON shop.id = Q4_NLOC_PROFIT.spoint_id
+AND q4_nloc_profit.sale_quarter = 4
+LEFT JOIN (
+  SELECT spoint_id, sum(profit) AS profit
+  FROM nlqp GROUP BY 1
+) AS year_nloc_profit
+ON shop.id = year_nloc_profit.spoint_id
+ORDER BY 1;
+
+
+
+BEGIN;
+CREATE TEMPORARY TABLE nlqp_temp ON COMMIT DROP
+AS
+  SELECT
+    spoint_id,
+    extract('quarter' from sale_time) as sale_quarter,
+    sum(sale_price) - sum(cost) AS profit,
+    count(*) AS nr_of_sales
+  FROM sale s
+  JOIN item_in_wh iw ON s.item_in_wh_id=iw.id
+  JOIN item i ON iw.item_id = i.id
+  JOIN salespoint sp ON s.spoint_id = sp.id
+  JOIN location sploc ON sp.loc_id = sploc.id
+  JOIN warehouse wh ON iw.whouse_id = wh.id
+  JOIN location whloc ON wh.loc_id = whloc.id
+  WHERE sale_time >= '2013-01-01'
+  AND sale_time < '2014-01-01'
+  AND sploc.id != whloc.id
+  GROUP BY 1,2
+  ;
+
+SELECT shop.sp_name AS shop_name,
+  q1_NLP.profit as q1_profit,
+  q2_NLP.profit as q2_profit,
+  q3_NLP.profit as q3_profit,
+  q4_NLP.profit as q4_profit,
+  year_NLP.profit as year_profit
+FROM (SELECT * FROM salespoint ORDER BY sp_name) AS shop
+LEFT JOIN nlqp_temp AS q1_NLP
+ON shop.id = Q1_NLP.spoint_id AND q1_NLP.sale_quarter = 1
+LEFT JOIN nlqp_temp AS q2_NLP
+ON shop.id = Q2_NLP.spoint_id AND q2_NLP.sale_quarter = 2
+LEFT JOIN nlqp_temp AS q3_NLP
+ON shop.id = Q3_NLP.spoint_id AND q3_NLP.sale_quarter = 3LEFT JOIN nlqp_temp AS q4_NLP
+ON shop.id = Q4_NLP.spoint_id AND q4_NLP.sale_quarter = 4
+LEFT JOIN (
+  select spoint_id, sum(profit) AS profit FROM nlqp_temp GROUP BY 1
+) AS year_NLP
+ON shop.id = year_NLP.spoint_id
+ORDER BY 1
+;
+
+COMMIT; -- here the temp table goes away
+
+
+CREATE MATERIALIZED VIEW nlqp_temp AS
+  SELECT spoint_id,
+    extract('quarter' from sale_time) as sale_quarter,
+    sum(sale_price) - sum(cost) AS profit,
+    count(*) AS nr_of_sales
+  FROM sale s
+  JOIN item_in_wh iw ON s.item_in_wh_id=iw.id
+  JOIN item i ON iw.item_id = i.id
+  JOIN salespoint sp ON s.spoint_id = sp.id
+  JOIN location sploc ON sp.loc_id = sploc.id
+  JOIN warehouse wh ON iw.whouse_id = wh.id
+  JOIN location whloc ON wh.loc_id = whloc.id
+  WHERE sale_time >= '2013-01-01'
+  AND sale_time < '2014-01-01'
+  AND sploc.id != whloc.id
+  GROUP BY 1,2;
+
+
+CREATE OR REPLACE FUNCTION consume_balance (
+  i_username text, i_amount numeric(10,2), max_credit numeric(10,2),
+  OUT success boolean, OUT remaining_balance numeric(10,2)) AS
+$$
+BEGIN
+  UPDATE accounts SET balance = balance - i_amount
+  WHERE username = i_username
+  AND balance - i_amount > - max_credit
+  RETURNING balance
+  INTO remaining_balance;
+  IF NOT FOUND THEN
+    success := FALSE;
+    SELECT balance
+    FROM accounts
+    WHERE username = i_username
+    INTO remaining_balance;
+  ELSE
+    success := TRUE;
+  END IF;
+END;
+$$ LANGUAGE plpgsql;

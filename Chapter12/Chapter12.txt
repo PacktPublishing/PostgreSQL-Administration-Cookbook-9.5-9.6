@@ -1,0 +1,48 @@
+SELECT
+  pid
+  ,application_name /* or other unique key */
+  ,pg_current_xlog_insert_location() /* WAL Insert location */
+  ,sent_location    /* WALSender location */
+  ,write_location   /* WALReceiver write loc */
+  ,flush_location   /* WALReceiver flush loc */
+  ,replay_location  /* Standby apply location */
+  ,backend_start    /* Backend start */
+FROM pg_stat_replication;
+
+SELECT last_msg_receipt_time - last_msg_send_time
+FROM pg_stat_wal_receiver;
+
+SELECT pg_last_xact_replay_timestamp();
+SELECT slot_name, database, age(xmin), age(catalog_xmin)
+FROM pg_replication_slots
+WHERE NOT active;
+
+SELECT slot_name
+FROM pg_replication_slots
+JOIN pg_stat_replication ON pid = active_pid;
+
+
+SELECT
+ application_name
+,state         /* startup, backup, catchup or streaming */
+,sync_priority /* 0, 1 or more */
+,sync_state    /* async, sync or potential */
+FROM pg_stat_replication
+ORDER BY sync_priority;
+
+
+CREATE OR REPLACE FUNCTION wait_for_lsn(loc pg_lsn)
+RETURNS VOID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  currloc pg_lsn;
+BEGIN
+  LOOP
+    IF pg_last_xlog_replay_location() IS NULL OR
+       pg_last_xlog_replay_location() >= loc THEN
+      RETURN;
+    END IF;
+    PERFORM pg_sleep(0.1); /* 100ms */
+  END LOOP;
+END $$;;

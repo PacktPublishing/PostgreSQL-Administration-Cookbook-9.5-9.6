@@ -1,0 +1,21 @@
+SELECT datname
+FROM pg_database
+WHERE oid IN (
+  SELECT pg_tablespace_databases(ts.oid)
+  FROM pg_tablespace ts
+  WHERE spcname = 'mytablespacename');
+
+
+SELECT 'pg_dump '
+  || array_to_string(
+       array_agg('-t ' || n.nspname || '.' || t.relname)
+       , ' ')
+  || ' -F c ' || :'DBNAME'
+  || ' > dumpfile_' || :'DBNAME' -- name of the output file
+FROM pg_class t
+JOIN pg_tablespace ts
+ON ts.oid = t.reltablespace
+JOIN pg_namespace n
+ON n.oid = t.relnamespace
+WHERE ts.spcname = :'TSNAME'
+AND t.relkind = 'r';

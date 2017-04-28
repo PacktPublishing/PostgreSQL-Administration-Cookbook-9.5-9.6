@@ -1,0 +1,107 @@
+
+SELECT table_name
+,pg_relation_size(table_schema || '.' || table_name) as size
+FROM information_schema.tables
+WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+ORDER BY size DESC
+LIMIT 10;
+
+
+SELECT (CASE WHEN reltuples > 0 THEN
+pg_relation_size(oid)*reltuples/(8192*relpages)
+ELSE 0
+END)::bigint AS estimated_row_count
+FROM pg_class
+WHERE oid = 'mytable'::regclass;
+
+
+CREATE OR REPLACE FUNCTION estimated_row_count(text)
+RETURNS bigint
+LANGUAGE sql
+AS $$
+SELECT (CASE WHEN reltuples > 0 THEN
+  pg_relation_size($1)*reltuples/(8192*relpages)
+  ELSE 0
+  END)::bigint
+FROM pg_class
+WHERE oid = $1::regclass;
+$$;
+
+
+CREATE OR REPLACE FUNCTION pg_relation_size_nolock(tablename regclass)
+RETURNS BIGINT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  classoutput RECORD;
+  tsid INTEGER;
+  rid INTEGER;
+  dbid INTEGER;
+  filepath TEXT;
+  filename TEXT;
+  datadir TEXT;
+  i INTEGER := 0;
+  tablesize BIGINT;
+BEGIN
+  --
+  -- Get data directory
+  --
+  EXECUTE 'SHOW data_directory' INTO datadir;
+  --
+  -- Get relfilenode and reltablespace
+  --
+  SELECT
+  reltablespace as tsid
+  ,relfilenode as rid
+  INTO classoutput
+  FROM pg_class
+  WHERE oid = tablename
+  AND relkind = 'r';
+  --
+  -- Throw an error if we can't find the tablename specified
+  --
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'tablename % not found', tablename;
+  END IF;
+  tsid := classoutput.tsid;
+  rid := classoutput.rid;
+  --
+  -- Get the database object identifier (oid)
+  --
+  SELECT oid INTO dbid
+  FROM pg_database
+  WHERE datname = current_database();
+  --
+  -- Use some internals knowledge to set the filepath
+  --
+  IF tsid = 0 THEN
+    filepath := datadir || '/base/' || dbid || '/' || rid;
+  ELSE
+    filepath := datadir || '/pg_tblspc/' || tsid || '/' || dbid || '/' || rid;
+  END IF;
+  --
+  -- Look for the first file. Report if missing
+  --
+  SELECT (pg_stat_file(filepath)).size
+  INTO tablesize;
+  --
+  -- Sum the sizes of additional files, if any
+  --
+  WHILE FOUND LOOP
+    i := i + 1;
+    filename := filepath || '.' || i;
+    --
+    -- pg_stat_file returns ERROR if it cannot see file
+    -- so we must trap the error and exit loop
+    --
+    BEGIN
+      SELECT tablesize + (pg_stat_file(filename)).size
+      INTO tablesize;
+    EXCEPTION
+      WHEN OTHERS THEN
+      EXIT;
+    END;
+  END LOOP;
+  RETURN tablesize;
+END;
+$$;

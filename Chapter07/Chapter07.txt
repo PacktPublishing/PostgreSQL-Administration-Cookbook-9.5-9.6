@@ -1,0 +1,174 @@
+DO $$
+DECLARE
+  t record;
+BEGIN
+  FOR t IN SELECT c.*, n.nspname
+  FROM pg_class c JOIN pg_namespace n
+  ON c.relnamespace = n.oid
+  WHERE n.nspname = 'test' /* ; not needed */
+  LOOP
+    EXECUTE 'ALTER TABLE '|| quote_ident(t.nspname) ||
+    '.' || quote_ident(t.relname) ||
+    ' ADD COLUMN last_update_timestamp ' ||
+    'TIMESTAMP WITH TIME ZONE';
+  END LOOP;
+END $$;
+
+
+--
+-- Put in a script called make-script.sql
+-- Invoke with
+-- psql -v i=0 make-script.sql
+-- psql -v i=1 make-script.sql
+--
+\t on
+\o script-:i.sql
+SELECT sql FROM (
+  SELECT 'ALTER TABLE '|| n.nspname || '.' || c.relname ||
+  ' ADD COLUMN last_update_timestamp TIMESTAMP WITH TIME ZONE DEFAULT
+  now();' as sql
+  ,row_number() OVER (ORDER BY pg_relation_size(c.oid))
+  FROM pg_class c
+  JOIN pg_namespace n
+  ON c.relnamespace = n.oid
+  WHERE n.nspname = 'test'
+  ORDER BY 2 DESC) as s
+WHERE row_number % 2 = :i;
+\o
+
+
+BEGIN;
+  ALTER TABLE cust
+    ALTER COLUMN firstname SET DATA TYPE text
+      USING firstname || ' ' || lastname,
+    ALTER COLUMN firstname SET NOT NULL,
+    ALTER COLUMN firstname SET DEFAULT '',
+    DROP COLUMN lastname;
+  ALTER TABLE cust RENAME firstname TO custname;
+COMMIT;
+
+
+CREATE TYPE satellites_urani AS ENUM ('Titania','Oberon');
+ALTER TYPE satellites_urani ADD VALUE 'Ariel' BEFORE 'Titania';
+ALTER TYPE satellites_iovis ADD VALUE 'Umbriel' AFTER 'Ariel';
+
+
+CREATE TYPE node AS (
+  node_name text,
+  connstr text,
+  standbys text[]);
+ALTER TYPE node
+  DROP ATTRIBUTE standbys,
+  ADD ATTRIBUTE async_standbys text[],
+  ADD ATTRIBUTE sync_standbys text[];
+
+
+CREATE SCHEMA foo
+  CREATE TABLE account
+    (id INTEGER NOT NULL PRIMARY KEY
+    ,balance NUMERIC(50,2))
+  CREATE VIEW accountsample AS
+    SELECT *
+    FROM account
+    WHERE random() < 0.1;
+
+
+SELECT spcname
+,relname
+,CASE WHEN relpersistence = 't' THEN 'temp ' ELSE '' END ||
+ CASE
+ WHEN relkind = 'r' THEN 'table'
+ WHEN relkind = 'f' THEN 'foreign table'
+ WHEN relkind = 't' THEN 'TOAST table'
+ WHEN relkind = 'v' THEN 'view'
+ WHEN relkind = 'm' THEN 'materialized view'
+ WHEN relkind = 'S' THEN 'sequence'
+ WHEN relkind = 'c' THEN 'type'
+ ELSE 'index' END as objtype
+ FROM pg_class c join pg_tablespace ts
+ON (CASE WHEN c.reltablespace = 0 THEN
+     (SELECT dattablespace FROM pg_database
+      WHERE datname = current_database())
+    ELSE c.reltablespace END) = ts.oid
+WHERE relname NOT LIKE 'pg_toast%'
+AND relnamespace NOT IN
+  (SELECT oid FROM pg_namespace
+   WHERE nspname IN ('pg_catalog', 'information_schema'))
+;
+
+
+SELECT i.relname as index_name
+, tsi.spcname as index_tbsp
+, t.relname as table_name
+, tst.spcname as table_tbsp
+FROM (
+  pg_class t /* tables */
+  JOIN pg_tablespace tst
+    ON t.reltablespace = tst.oid OR
+      (t.reltablespace = 0 AND tst.spcname = 'pg_default'))
+JOIN pg_index pgi
+  ON pgi.indrelid = t.oid
+JOIN (
+  pg_class i /* indexes */
+  JOIN pg_tablespace tsi
+  ON i.reltablespace = tsi.oid OR
+    (i.reltablespace = 0 AND tsi.spcname = 'pg_default'))
+  ON pgi.indexrelid = i.oid
+WHERE i.relname NOT LIKE 'pg_toast%'
+AND i.reltablespace != t.reltablespace
+;
+
+
+
+CREATE FUNCTION my_task(VOID)
+RETURNS SETOF text AS $$
+  CONNECT 'dbname=myremoteserver';
+  SELECT my_task();
+$$ LANGUAGE plproxy;
+
+CREATE FUNCTION get_cust_email(p_username text)
+RETURNS SETOF text AS $$
+  CONNECT 'dbname=myremoteserver';
+  SELECT email FROM users WHERE username = p_username;
+$$ LANGUAGE plproxy;
+
+CREATE FUNCTION get_cust_email(p_username text)
+RETURNS SETOF text AS $$
+  CLUSTER 'mycluster';
+  RUN ON hashtext(p_username);
+  SELECT email FROM users WHERE username = p_username;
+$$ LANGUAGE plproxy;
+
+
+
+CREATE TABLE dish
+( dish_id SERIAL PRIMARY KEY
+, dish_description text
+);
+
+CREATE TABLE eater
+( eater_id SERIAL
+, eating_date date
+, dish_id int REFERENCES dish (dish_id)
+);
+
+INSERT INTO dish (dish_description)
+VALUES ('Lentils'), ('Mango'), ('Plantain'), ('Rice'), ('Tea');
+
+INSERT INTO eater(eating_date, dish_id)
+SELECT floor(abs(sin(n)) * 365) :: int + date '2014-01-01'
+, ceil(abs(sin(n :: float * n))*5) :: int
+FROM generate_series(1,500000) AS rand(n);
+
+CREATE VIEW v_dish AS
+SELECT dish_description, count(*)
+FROM dish JOIN eater USING (dish_id)
+GROUP BY dish_description
+ORDER BY 1;
+
+CREATE MATERIALIZED VIEW m_dish AS
+SELECT dish_description, count(*)
+FROM dish JOIN eater USING (dish_id)
+GROUP BY dish_description
+ORDER BY 1;
+

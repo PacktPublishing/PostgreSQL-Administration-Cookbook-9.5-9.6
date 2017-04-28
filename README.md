@@ -6,7 +6,7 @@ PostgreSQL is a powerful opensource database management system; now recognized a
 Starting with short and simple recipes, you will soon dive into core features, such as configuration, server control, tables, and data. You will tackle a variety of problems a database administrator usually encounters, from creating tables to managing views, from improving performance to securing your database, and from using monitoring tools to using storage engines. Recipes based on important topics such as high availability, concurrency, replication, backup and recovery, as well as diagnostics and troubleshooting are also given special importance.
 
 
-##Instructions and Navigation
+## Instructions and Navigation
 All of the code is organized into folders. Each folder starts with a number followed by the application name. For example, Chapter02.
 
 

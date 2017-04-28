@@ -22,11 +22,11 @@ CREATE USER repuser
 
 We need the following software for this book:
 
-PostgreSQL 9.5 or PostgreSQL 9.6 Server Software
+* PostgreSQL 9.5 or PostgreSQL 9.6 Server Software
 
-psql client utility (part of 9.6)
+* psql client utility (part of 9.6)
 
-pgAdmin4
+* pgAdmin4
 
 ## Related Products
 * [PostgreSQL 9 Administration Cookbook - Second Edition](https://www.packtpub.com/big-data-and-business-intelligence/postgresql-9-administration-cookbook-second-edition?utm_source=github&utm_medium=repository&utm_campaign=9781849519069)

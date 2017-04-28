@@ -1,4 +1,4 @@
-#PostgreSQL Administration Cookbook, 9.5/9.6 Edition
+# PostgreSQL Administration Cookbook, 9.5/9.6 Edition
 This is the code repository for [PostgreSQL Administration Cookbook, 9.5/9.6 Edition](https://www.packtpub.com/big-data-and-business-intelligence/postgresql-administration-cookbook-9596-edition?utm_source=github&utm_medium=repository&utm_campaign=9781785883187), published by [Packt](https://www.packtpub.com/?utm_source=github). It contains all the supporting project files necessary to work through the book from start to finish.
 ## About the Book
 PostgreSQL is a powerful opensource database management system; now recognized as the expert's choice for a wide range of applications, it has an enviable reputation for performance and stability. PostgreSQL provides an integrated feature set comprising relational database features, object-relational, text search, Geographical Info Systems, analytical tools for big data and JSON/XML document management.
